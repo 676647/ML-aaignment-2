@@ -1,0 +1,44 @@
+{
+  "feature_columns": [
+    "duration_ms",
+    "danceability",
+    "energy",
+    "key",
+    "loudness",
+    "mode",
+    "speechiness",
+    "acousticness",
+    "instrumentalness",
+    "liveness",
+    "valence",
+    "tempo",
+    "time_signature"
+  ],
+  "main_genres": [
+    "pop",
+    "rock",
+    "hip-hop",
+    "electronic",
+    "r-n-b",
+    "jazz",
+    "classical",
+    "country",
+    "folk",
+    "reggae"
+  ],
+  "genre_grouping_size": 45,
+  "random_state": 42,
+  "samples_final": 35000,
+  "class_distribution": {
+    "folk": 5000,
+    "electronic": 5000,
+    "pop": 5000,
+    "rock": 5000,
+    "reggae": 4000,
+    "classical": 3000,
+    "country": 3000,
+    "r-n-b": 2000,
+    "jazz": 2000,
+    "hip-hop": 1000
+  }
+}

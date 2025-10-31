@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# app.py — Music Genre Classifier (dataset-only, model from Google Drive)
+# app.py — Music Genre Classifier (dataset-only, model from Google Drive via gdown)
 
 import os
 import json
@@ -7,9 +7,9 @@ import numpy as np
 import pandas as pd
 import gradio as gr
 
-import requests
 import pickle
 import joblib
+import gdown  # <-- NYTT: bruker gdown for Drive-nedlasting
 from typing import Optional, List, Tuple
 
 # -----------------------------
@@ -23,54 +23,36 @@ MODEL_DIR = "./GenreDetectorV2/models"
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 # Filer:
-model_path  = f"{MODEL_DIR}/final_rf.pkl"         # hentes fra Google Drive
+model_path  = f"{MODEL_DIR}/final_rf.pkl"         # hentes fra Google Drive (hvis mangler)
 scaler_path = f"{MODEL_DIR}/scaler.pkl"           # lokal
 le_path     = f"{MODEL_DIR}/label_encoder.pkl"    # lokal
 
-# Google Drive fil-ID for final_rf.pkl (BYTT til din ID)
+# Google Drive fil-ID for final_rf.pkl (BYTT til din ID om nødvendig)
 DRIVE_MODEL_ID = "1GFkE6aIghFV5qoTOTYXqaF89i169dzsJ"
 
 # -----------------------------
-# Hjelpere for nedlasting fra Google Drive
+# Last ned modellen med gdown (kun hvis mangler)
 # -----------------------------
-def _gdrive_download(file_id: str, dest_path: str, chunk_size: int = 32768):
-    """
-    Laster ned store filer fra Google Drive med bekreftelsestoken-håndtering.
-    """
-    URL = "https://drive.google.com/uc?export=download"
-    with requests.Session() as session:
-        response = session.get(URL, params={"id": file_id}, stream=True)
-        response.raise_for_status()
-
-        token = None
-        for k, v in response.cookies.items():
-            if k.startswith("download_warning"):
-                token = v
-                break
-
-        if token:
-            response = session.get(URL, params={"id": file_id, "confirm": token}, stream=True)
-            response.raise_for_status()
-
-        with open(dest_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size):
-                if chunk:
-                    f.write(chunk)
-
-def _ensure_artifact(path: str, drive_id: Optional[str], name: str):
-    if os.path.exists(path):
+def _ensure_model_with_gdown(p: str, drive_id: str):
+    if os.path.exists(p):
         return
     if not drive_id:
         raise FileNotFoundError(
-            f"Mangler {name}: {path}\n"
-            f"Sett DRIVE-ID for {name} eller plasser fila lokalt."
+            f"Mangler modellfil: {p}\n"
+            f"Sett DRIVE_MODEL_ID eller plasser fila lokalt."
         )
-    print(f"⬇️ Laster ned {name} fra Google Drive …")
-    _gdrive_download(drive_id, path)
-    print(f"✅ Lagret {name} til {path}")
+    print("⬇️ Laster ned modell fra Google Drive via gdown ...")
+    url = f"https://drive.google.com/uc?id={drive_id}"
+    # quiet=False -> viser progress
+    gdown.download(url, p, quiet=False)
+    # enkel sanity check
+    if not os.path.exists(p) or os.path.getsize(p) < 1024 * 1024:
+        raise RuntimeError(
+            f"Nedlastet modellfil ser for liten ut eller mangler: {p}"
+        )
+    print(f"✅ Modell lagret til {p}")
 
-# Last ned modellen (kun hvis mangler)
-_ensure_artifact(model_path, DRIVE_MODEL_ID, "modell")
+_ensure_model_with_gdown(model_path, DRIVE_MODEL_ID)
 
 # -----------------------------
 # Robust loader (joblib → pickle)
@@ -79,14 +61,28 @@ def _smart_load(path: str):
     # joblib (vanlig for sklearn)
     try:
         return joblib.load(path)
-    except Exception:
+    except Exception as e_joblib:
         pass
     # ren pickle
     try:
         with open(path, "rb") as f:
             return pickle.load(f)
-    except Exception as e:
-        raise RuntimeError(f"Kunne ikke laste filen: {path}\nSiste feil: {e}")
+    except Exception as e_pickle:
+        # hint hvis HTML ved en feil (skulle ikke skje med gdown, men greit å ha)
+        try:
+            with open(path, "rb") as f:
+                head = f.read(64)
+            if head.startswith(b"<"):
+                raise RuntimeError(
+                    f"{path} ser ut til å være HTML (feil nedlasting)."
+                )
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"Kunne ikke laste filen: {path}\n"
+            f"joblib-feil: {e_joblib}\n"
+            f"pickle-feil: {e_pickle}"
+        )
 
 # -----------------------------
 # Last artefakter (modell, scaler, label encoder)
@@ -112,7 +108,6 @@ FEATURE_COLUMNS_FALLBACK = [
     "valence", "tempo",
 ]
 FEATURE_COLUMNS = list(getattr(scaler, "feature_names_in_", FEATURE_COLUMNS_FALLBACK))
-
 
 def _validate_pipeline():
     problems = []
@@ -166,7 +161,6 @@ def load_local_dataset():
     keep = [c for c in df.columns if c in needed]
     missing_feats = [c for c in FEATURE_COLUMNS if c not in keep]
     if missing_feats:
-        # Ikke kritisk for kjøring, men greit å vite
         print(f"⚠️ Mangler kolonner i CSV: {missing_feats}. Sørg for at trenings-CSV matcher FEATURE_COLUMNS.")
 
     df = df[keep].copy()
@@ -230,7 +224,6 @@ def predict_from_features(df: pd.DataFrame) -> tuple[str, list[tuple[str, float]
         top5_idx = np.argsort(probs)[::-1][:5]
         top5 = [(le.inverse_transform([i])[0], float(probs[i])) for i in top5_idx]
     return pred_label, top5
-
 
 # -----------------------------
 # Gradio UI
@@ -336,4 +329,4 @@ with gr.Blocks(title="🎧 Genre Classifier (dataset-only)") as demo:
 
 # Start server — velg automatisk ledig port og vis feil i UI
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=None, show_error=True, share=True)
+    demo.launch(share=True)

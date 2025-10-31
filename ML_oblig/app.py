@@ -1,48 +1,118 @@
 #!/usr/bin/env python3
-# app.py — Music Genre Classifier (dataset-only, no external APIs)
+# app.py — Music Genre Classifier (dataset-only, model from Google Drive)
 
 import os
 import json
-import joblib
 import numpy as np
 import pandas as pd
 import gradio as gr
-from typing import List, Tuple
+
+import requests
+import pickle
+import joblib
+from typing import Optional, List, Tuple
 
 # -----------------------------
-# Konfigurasjon
+# Konfigurasjon / stier
 # -----------------------------
-MODEL_DIR = os.environ.get("MODEL_DIR", "./GenreDetectorV2/models")
-MODEL_PATH = os.path.join(MODEL_DIR, "logreg_model.joblib")
-SCALER_PATH = os.path.join(MODEL_DIR, "scaler.joblib")
-LABELENC_PATH = os.path.join(MODEL_DIR, "labelencoder.joblib")
-
-# Sti til Kaggle CSV (kan overstyres med env)
+# Data (kan overstyres via miljøvariabel)
 DATASET_CSV = os.getenv("DATASET_CSV", "./GenreDetectorV2/data/train.csv")
 
-# Funksjonssett som modellen forventer (må matche treningen)
-FEATURE_COLUMNS = [
-    "duration_ms", "danceability", "energy", "key", "loudness", "mode",
-    "speechiness", "acousticness", "instrumentalness", "liveness",
-    "valence", "tempo", "time_signature"
-]
+# Modellkatalog
+MODEL_DIR = "./GenreDetectorV2/models"
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+# Filer:
+model_path  = f"{MODEL_DIR}/final_rf.pkl"         # hentes fra Google Drive
+scaler_path = f"{MODEL_DIR}/scaler.pkl"           # lokal
+le_path     = f"{MODEL_DIR}/label_encoder.pkl"    # lokal
+
+# Google Drive fil-ID for final_rf.pkl (BYTT til din ID)
+DRIVE_MODEL_ID = "1GFkE6aIghFV5qoTOTYXqaF89i169dzsJ"
 
 # -----------------------------
-# Last model artefakter
+# Hjelpere for nedlasting fra Google Drive
 # -----------------------------
-def _load_artifacts():
-    missing = [p for p in [MODEL_PATH, SCALER_PATH, LABELENC_PATH] if not os.path.exists(p)]
-    if missing:
+def _gdrive_download(file_id: str, dest_path: str, chunk_size: int = 32768):
+    """
+    Laster ned store filer fra Google Drive med bekreftelsestoken-håndtering.
+    """
+    URL = "https://drive.google.com/uc?export=download"
+    with requests.Session() as session:
+        response = session.get(URL, params={"id": file_id}, stream=True)
+        response.raise_for_status()
+
+        token = None
+        for k, v in response.cookies.items():
+            if k.startswith("download_warning"):
+                token = v
+                break
+
+        if token:
+            response = session.get(URL, params={"id": file_id, "confirm": token}, stream=True)
+            response.raise_for_status()
+
+        with open(dest_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size):
+                if chunk:
+                    f.write(chunk)
+
+def _ensure_artifact(path: str, drive_id: Optional[str], name: str):
+    if os.path.exists(path):
+        return
+    if not drive_id:
         raise FileNotFoundError(
-            "Finner ikke modellfiler. Mangler:\n" + "\n".join(missing) +
-            "\n\nKjør treningsscriptet så filene ligger i ./GenreDetectorV2/models/."
+            f"Mangler {name}: {path}\n"
+            f"Sett DRIVE-ID for {name} eller plasser fila lokalt."
         )
-    clf = joblib.load(MODEL_PATH)
-    scaler = joblib.load(SCALER_PATH)
-    le = joblib.load(LABELENC_PATH)
-    return clf, scaler, le
+    print(f"⬇️ Laster ned {name} fra Google Drive …")
+    _gdrive_download(drive_id, path)
+    print(f"✅ Lagret {name} til {path}")
 
-clf, scaler, le = _load_artifacts()
+# Last ned modellen (kun hvis mangler)
+_ensure_artifact(model_path, DRIVE_MODEL_ID, "modell")
+
+# -----------------------------
+# Robust loader (joblib → pickle)
+# -----------------------------
+def _smart_load(path: str):
+    # joblib (vanlig for sklearn)
+    try:
+        return joblib.load(path)
+    except Exception:
+        pass
+    # ren pickle
+    try:
+        with open(path, "rb") as f:
+            return pickle.load(f)
+    except Exception as e:
+        raise RuntimeError(f"Kunne ikke laste filen: {path}\nSiste feil: {e}")
+
+# -----------------------------
+# Last artefakter (modell, scaler, label encoder)
+# -----------------------------
+missing = [p for p in [scaler_path, le_path] if not os.path.exists(p)]
+if missing:
+    raise FileNotFoundError(
+        "Mangler nødvendige lokale artefakter:\n" + "\n".join(missing) +
+        "\n\nLegg 'scaler.pkl' og 'label_encoder.pkl' i ./GenreDetectorV2/models/"
+    )
+
+clf = _smart_load(model_path)
+scaler = _smart_load(scaler_path)
+le = _smart_load(le_path)
+print("✅ Modell, scaler og label encoder lastet inn!")
+
+# -----------------------------
+# Feature-oppsett (match treningen!)
+# -----------------------------
+FEATURE_COLUMNS_FALLBACK = [
+    "duration_ms", "danceability", "energy", "loudness",
+    "speechiness", "acousticness", "instrumentalness", "liveness",
+    "valence", "tempo",
+]
+FEATURE_COLUMNS = list(getattr(scaler, "feature_names_in_", FEATURE_COLUMNS_FALLBACK))
+
 
 def _validate_pipeline():
     problems = []
@@ -57,9 +127,13 @@ def _validate_pipeline():
                 f"Scaler:   {list(scaler.feature_names_in_)}\n"
                 f"Forventet:{FEATURE_COLUMNS}"
             )
+    if hasattr(clf, "classes_") and hasattr(le, "classes_") and len(clf.classes_) != len(le.classes_):
+        problems.append("Model classes_ != LabelEncoder classes_.")
     if problems:
         print("⚠️ Pipelinevalidering:")
         for p in problems: print(" -", p)
+    else:
+        print("✅ Pipeline ser konsistent ut.")
 
 _validate_pipeline()
 
@@ -123,22 +197,30 @@ load_local_dataset()
 # Prediksjon
 # -----------------------------
 def predict_from_features(df: pd.DataFrame) -> tuple[str, list[tuple[str, float]]]:
-    # korrekt rekkefølge + type-coerce
-    df = df[FEATURE_COLUMNS].copy()
+    # sørg for alle features i riktig rekkefølge
+    X = pd.DataFrame(columns=FEATURE_COLUMNS)
+    for c in FEATURE_COLUMNS:
+        if c in df.columns:
+            X[c] = df[c]
+        else:
+            # fyll inn 0 hvis kolonne ikke finnes i inn-data
+            X[c] = 0
 
-    int_cols = ["key", "mode", "time_signature", "duration_ms"]
-    float_cols = [c for c in FEATURE_COLUMNS if c not in int_cols]
-    for c in int_cols:
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
-    for c in float_cols:
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0).astype(float)
+    # type-casting: disse er typisk int i Spotify-features
+    int_like = {"key", "mode", "time_signature", "duration_ms"}
+    for c in FEATURE_COLUMNS:
+        if c in int_like:
+            X[c] = pd.to_numeric(X[c], errors="coerce").fillna(0).astype(int)
+        else:
+            X[c] = pd.to_numeric(X[c], errors="coerce").fillna(0.0).astype(float)
 
-    if hasattr(scaler, "n_features_in_") and scaler.n_features_in_ != df.shape[1]:
-        raise ValueError(f"Scaler forventer {scaler.n_features_in_} features, fikk {df.shape[1]}.")
-    if hasattr(clf, "n_features_in_") and clf.n_features_in_ != df.shape[1]:
-        raise ValueError(f"Modellen forventer {clf.n_features_in_} features, fikk {df.shape[1]}.")
+    # valider forventet antall features
+    if hasattr(scaler, "n_features_in_") and scaler.n_features_in_ != X.shape[1]:
+        raise ValueError(f"Scaler forventer {scaler.n_features_in_} features, fikk {X.shape[1]}.")
+    if hasattr(clf, "n_features_in_") and clf.n_features_in_ != X.shape[1]:
+        raise ValueError(f"Modellen forventer {clf.n_features_in_} features, fikk {X.shape[1]}.")
 
-    X_sc = scaler.transform(df)
+    X_sc = scaler.transform(X)
     y_pred_enc = clf.predict(X_sc)[0]
     pred_label = le.inverse_transform([y_pred_enc])[0]
 
@@ -148,6 +230,7 @@ def predict_from_features(df: pd.DataFrame) -> tuple[str, list[tuple[str, float]
         top5_idx = np.argsort(probs)[::-1][:5]
         top5 = [(le.inverse_transform([i])[0], float(probs[i])) for i in top5_idx]
     return pred_label, top5
+
 
 # -----------------------------
 # Gradio UI

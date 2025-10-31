@@ -2,15 +2,13 @@
 # app.py — Music Genre Classifier (dataset-only, model from Google Drive via gdown)
 
 import os
-import json
 import numpy as np
 import pandas as pd
 import gradio as gr
-
 import pickle
 import joblib
-import gdown  # <-- NYTT: bruker gdown for Drive-nedlasting
-from typing import Optional, List, Tuple
+import gdown
+
 
 # -----------------------------
 # Konfigurasjon / stier

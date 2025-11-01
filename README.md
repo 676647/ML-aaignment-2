@@ -4,7 +4,7 @@ ML aaignment 2
 0. This project can be run in two distinct modes: 1. Dataset Lookup and 2. Real-Time MP3 Analysis.
 
 1. Data and Model Details:
-2. 
+
 Total songs in the dataset: 114000 songs
 
 Songs used for training: 35000 

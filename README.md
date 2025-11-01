@@ -1,9 +1,9 @@
 # ML-aaignment-2
 ML aaignment 2
 
-0. This project can be run in two distinct modes: 1. Dataset Lookup and 2. Real-Time MP3 Analysis.
+A) This project can be run in two distinct modes: 1. Dataset Lookup and 2. Real-Time MP3 Analysis.
 
-1. Data and Model Details:
+B) Data and Model Details:
 
 Total songs in the dataset: 114000 songs
 
@@ -16,7 +16,7 @@ Final Model: RFC
 Achieved Accuracy: on validation: 61% + 90% ROC AUC. on test: 58% + 89% ROC AUC
 
 
-2. How to run:
+C) How to run:
 Method 1:
 1. Run app.py
 - Song choice from the dataset

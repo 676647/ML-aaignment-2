@@ -10,10 +10,6 @@ import joblib
 import gdown
 
 
-# -----------------------------
-# Konfigurasjon / stier
-# -----------------------------
-# Data (kan overstyres via miljøvariabel)
 DATASET_CSV = os.getenv("DATASET_CSV", "./GenreDetectorV2/data/train.csv")
 
 # Modellkatalog
@@ -25,12 +21,11 @@ model_path  = f"{MODEL_DIR}/final_rf.pkl"         # hentes fra Google Drive (hvi
 scaler_path = f"{MODEL_DIR}/scaler.pkl"           # lokal
 le_path     = f"{MODEL_DIR}/label_encoder.pkl"    # lokal
 
-# Google Drive fil-ID for final_rf.pkl (BYTT til din ID om nødvendig)
+# Google Drive fil-ID for final_rf.pkl
 DRIVE_MODEL_ID = "1GFkE6aIghFV5qoTOTYXqaF89i169dzsJ"
 
-# -----------------------------
-# Last ned modellen med gdown (kun hvis mangler)
-# -----------------------------
+
+# Last ned modellen med gdown
 def _ensure_model_with_gdown(p: str, drive_id: str):
     if os.path.exists(p):
         return
@@ -41,9 +36,9 @@ def _ensure_model_with_gdown(p: str, drive_id: str):
         )
     print("⬇️ Laster ned modell fra Google Drive via gdown ...")
     url = f"https://drive.google.com/uc?id={drive_id}"
-    # quiet=False -> viser progress
+
     gdown.download(url, p, quiet=False)
-    # enkel sanity check
+
     if not os.path.exists(p) or os.path.getsize(p) < 1024 * 1024:
         raise RuntimeError(
             f"Nedlastet modellfil ser for liten ut eller mangler: {p}"
@@ -52,21 +47,19 @@ def _ensure_model_with_gdown(p: str, drive_id: str):
 
 _ensure_model_with_gdown(model_path, DRIVE_MODEL_ID)
 
-# -----------------------------
-# Robust loader (joblib → pickle)
-# -----------------------------
+
 def _smart_load(path: str):
-    # joblib (vanlig for sklearn)
+
     try:
         return joblib.load(path)
     except Exception as e_joblib:
         pass
-    # ren pickle
+
     try:
         with open(path, "rb") as f:
             return pickle.load(f)
     except Exception as e_pickle:
-        # hint hvis HTML ved en feil (skulle ikke skje med gdown, men greit å ha)
+
         try:
             with open(path, "rb") as f:
                 head = f.read(64)
@@ -82,9 +75,8 @@ def _smart_load(path: str):
             f"pickle-feil: {e_pickle}"
         )
 
-# -----------------------------
-# Last artefakter (modell, scaler, label encoder)
-# -----------------------------
+
+# Last modell, scaler, label encoder
 missing = [p for p in [scaler_path, le_path] if not os.path.exists(p)]
 if missing:
     raise FileNotFoundError(
@@ -97,9 +89,8 @@ scaler = _smart_load(scaler_path)
 le = _smart_load(le_path)
 print("✅ Modell, scaler og label encoder lastet inn!")
 
-# -----------------------------
-# Feature-oppsett (match treningen!)
-# -----------------------------
+
+# Feature-oppsett
 FEATURE_COLUMNS_FALLBACK = [
     "duration_ms", "danceability", "energy", "loudness",
     "speechiness", "acousticness", "instrumentalness", "liveness",
@@ -130,12 +121,11 @@ def _validate_pipeline():
 
 _validate_pipeline()
 
-# -----------------------------
+
 # Last datasett i minne
-# -----------------------------
 df_cache: pd.DataFrame | None = None
 id_to_row = {}
-search_index: list[tuple[str, str]] = []  # (visningslabel, track_id)
+search_index: list[tuple[str, str]] = []
 
 def _safe_str(x):
     return str(x) if pd.notna(x) else ""
@@ -163,7 +153,7 @@ def load_local_dataset():
 
     df = df[keep].copy()
 
-    # Bygg søketekst (for enkel substring-søk)
+    # Bygg søketekst for enkel substring-søk
     name_col = "track_name" if "track_name" in df.columns else None
     artist_col = "artists" if "artists" in df.columns else None
     df["__search_text"] = (
@@ -185,9 +175,8 @@ def load_local_dataset():
 
 load_local_dataset()
 
-# -----------------------------
+
 # Prediksjon
-# -----------------------------
 def predict_from_features(df: pd.DataFrame) -> tuple[str, list[tuple[str, float]]]:
     # sørg for alle features i riktig rekkefølge
     X = pd.DataFrame(columns=FEATURE_COLUMNS)
@@ -195,10 +184,9 @@ def predict_from_features(df: pd.DataFrame) -> tuple[str, list[tuple[str, float]
         if c in df.columns:
             X[c] = df[c]
         else:
-            # fyll inn 0 hvis kolonne ikke finnes i inn-data
+            # fyll inn 0 hvis kolonne ikke finnes i data
             X[c] = 0
 
-    # type-casting: disse er typisk int i Spotify-features
     int_like = {"key", "mode", "time_signature", "duration_ms"}
     for c in FEATURE_COLUMNS:
         if c in int_like:
@@ -223,14 +211,12 @@ def predict_from_features(df: pd.DataFrame) -> tuple[str, list[tuple[str, float]
         top5 = [(le.inverse_transform([i])[0], float(probs[i])) for i in top5_idx]
     return pred_label, top5
 
-# -----------------------------
+
 # Gradio UI
-# -----------------------------
 with gr.Blocks(title="🎧 Genre Classifier (dataset-only)") as demo:
     gr.Markdown(
-        "# 🎶 Music Genre Classification — Datasett\n"
+        "#  Music Genre Classification — Datasett\n"
         "Søk i **Kaggle-datasettet** lokalt og klassifiser sjanger med en trenet modell.\n"
-        "Ingen eksterne APIer benyttes."
     )
 
     with gr.Tab("Datasett-søk"):
@@ -253,14 +239,12 @@ with gr.Blocks(title="🎧 Genre Classifier (dataset-only)") as demo:
                 return gr.update(choices=[]), [], "Skriv noe for å søke."
 
             ql = q.strip().lower()
-            # substring-søk på precomputet search_text eller label
+
             matches = []
             for (label, tid) in search_index:
-                # rask sjekk i label først
                 if ql in label.lower():
                     matches.append((label, tid))
                 else:
-                    # fallback: søk i __search_text (tittel+artist)
                     row = id_to_row.get(tid)
                     if row is not None:
                         st = row.get("__search_text", "")
@@ -287,7 +271,7 @@ with gr.Blocks(title="🎧 Genre Classifier (dataset-only)") as demo:
                 title = row.get("track_name", "")
                 artist = row.get("artists", "")
                 dur = row.get("duration_ms", "")
-                # valgfritt: vis enkelte featureverdier
+
                 return (
                     f"**{title}** — {artist}\n\n"
                     f"Varighet: {dur} ms\n\n"
@@ -320,10 +304,6 @@ with gr.Blocks(title="🎧 Genre Classifier (dataset-only)") as demo:
         ds_results.change(ds_show, [ds_results, ds_cache], [ds_info])
         ds_predict_btn.click(ds_predict, [ds_results, ds_cache], [ds_pred_label, ds_top5])
 
-    gr.Markdown(
-        "ℹ️ Sørg for at `DATASET_CSV` peker til `train.csv` (f.eks. `./GenreDetectorV2/data/train.csv`).\n\n"
-        "Modellfiler må ligge i `./GenreDetectorV2/models/`."
-    )
 
 # Start server — velg automatisk ledig port og vis feil i UI
 if __name__ == "__main__":

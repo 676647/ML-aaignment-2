@@ -5,9 +5,13 @@ This project can be run in two distinct modes: 1. Dataset Lookup and 2. Real-Tim
 
 Data and Model Details:
 Total songs in the dataset: 114000 songs
+
 Songs used for training: 35000 
+
 Test set Split: 20% of the 35 000 songs were reserved for testing
+
 Final Model: RFC
+
 Achieved Accuracy: on validation: 61% + 90% ROC AUC. on test: 58% + 89% ROC AUC
 
 
